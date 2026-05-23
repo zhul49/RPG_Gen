@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Env / IDE
+.env
+.venv/
+.idea/
+.vscode/
+
+# Data — raw datasets are large; processed/derived stays out of git
+data/raw/
+data/processed/
+*.parquet
+*.arrow
+*.jsonl
+!configs/**/*.jsonl
+
+# Model artifacts
+checkpoints/
+runs/
+wandb/
+*.bin
+*.safetensors
+
+# Misc
+*.log
+.DS_Store
