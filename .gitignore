@@ -29,3 +29,11 @@ wandb/
 # Misc
 *.log
 .DS_Store
+
+# Synthetic (LLM-authored) training data + its generators — keep local, do not push
+/Dont_commit/
+
+# Eval/test harness — testing only, keep local
+scripts/eval_scenarios.py
+scripts/eval_suite.py
+scripts/playtest_multiturn.py
