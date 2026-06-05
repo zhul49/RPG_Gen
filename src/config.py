@@ -16,7 +16,8 @@ DEFAULT_CHARACTERS = (
     "- Bess — the cook, runs the galley and hears all the gossip.\n"
 )
 
-ADAPTER = REPO_ROOT / "runs" / "v11" / "final"
+# load the trained adapter from the Hugging Face hub instead of a local folder
+ADAPTER = "Huggingzhu1/gm-rpg-v11"
 DB_PATH = REPO_ROOT / "data" / "world_state" / "chroma"
 PORT = 7860
 
