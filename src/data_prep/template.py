@@ -50,14 +50,18 @@ def _none_if_blank(v):
     if v is None:
         return "(none)"
     s = str(v).strip()
-    return s if s else "(none)"
+    if s == "":
+        return "(none)"
+    return s
 
 
 def render_user_block(slots):
-    # build the user message
+    # build the user message, one "## Header" section per slot
     parts = []
     for k in SLOT_KEYS:
-        parts.append(f"## {SLOT_HEADERS[k]}\n{_none_if_blank(slots.get(k))}")
+        header = SLOT_HEADERS[k]
+        value = _none_if_blank(slots.get(k))
+        parts.append(f"## {header}\n{value}")
     return "\n\n".join(parts)
 
 

@@ -37,8 +37,7 @@ Aim for 0–6 entries. If the turn contains no durable world info, output nothin
 --- END ---
 """
 
-# Keys that signal the model labeled something generically instead of naming a
-# real entity — drop these outright (they were the bulk of the RAG pollution).
+# generic labels we drop instead of saving as real facts
 NOISE_KEYS = {
     "npc", "unknown npc", "an npc", "plot thread", "tension", "atmosphere",
     "threat", "threat of death", "threat of consequences", "threat of takeover",
@@ -56,9 +55,10 @@ def _client_lazy():
 
 
 def extract_facts(gm_turn):
-    """Returns list[str] of facts (may be empty)."""
+    # pull a list of durable facts out of a GM turn
     if not gm_turn or not gm_turn.strip():
         return []
+    # no API key so we cannot call the model
     if not os.environ.get("OPENAI_API_KEY"):
         return []
 
@@ -83,12 +83,18 @@ def extract_facts(gm_turn):
         if line.endswith(":") and len(line) < 40:
             continue
         low = line.lower()
-        if any(p in low for p in META_PHRASES):
+        # skip lines where the model says there are no facts
+        skip = False
+        for p in META_PHRASES:
+            if p in low:
+                skip = True
+                break
+        if skip:
             continue
-        # Real facts use the format "Name — description"; require the dash.
+        # real facts have a dash between the name and the description
         if "—" not in line and " - " not in line:
             continue
-        # Drop generically-labeled noise (e.g. "NPC — ...", "Tension — ...").
+        # drop generic labels like NPC or Tension
         key = re.split(r"\s—\s|—| - ", line, maxsplit=1)[0].strip().lower()
         if key in NOISE_KEYS:
             continue

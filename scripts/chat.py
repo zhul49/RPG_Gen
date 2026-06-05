@@ -6,34 +6,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.inference.generate import load, generate
 from src.data_prep.template import to_messages, SYSTEM_PROMPT
+# all the shared defaults live in one place now so chat and the web app match
+from src.config import (
+    DEFAULT_SETTING, DEFAULT_CHARACTERS, ADAPTER, DB_PATH,
+    TEMPERATURE, REPETITION_PENALTY, MAX_NEW_TOKENS, RAG_K, HISTORY_TURNS,
+)
 
 # the model was trained on this prompt, so use the same one or it gets worse
 INFERENCE_SYSTEM_PROMPT = SYSTEM_PROMPT
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-DEFAULT_SETTING = (
-    "The Marigold, a merchant ship a few days out at sea, its hold packed with "
-    "barrels of sugar bound for the Kingdom of Hyde. Salt spray, creaking "
-    "timbers, and a stiff wind in the sails."
-)
-DEFAULT_CHARACTERS = (
-    "- Captain John — weathered, steady, has made this run a dozen times.\n"
-    "- Mara — the first mate, sharp-tongued and always watching the horizon.\n"
-    "- Tom — the young deckhand, eager but green.\n"
-    "- Bess — the cook, runs the galley and hears all the gossip.\n"
-)
-
-
-# how many past turns to send back to the model as history
-HISTORY_TURNS = 20
-
-ADAPTER = REPO_ROOT / "runs" / "v11" / "final"
-DB_PATH = REPO_ROOT / "data" / "world_state" / "chroma"
-TEMPERATURE = 0.6
-REPETITION_PENALTY = 1.15
-MAX_NEW_TOKENS = 300
-RAG_K = 20  # how many facts to pull from memory each turn
 
 
 def render_history(turns):

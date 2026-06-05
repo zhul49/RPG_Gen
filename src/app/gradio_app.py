@@ -1,40 +1,26 @@
-import argparse
-from pathlib import Path
-
 import gradio as gr
 
-from src.data_prep.template import to_messages
+from src.data_prep.template import to_messages, SYSTEM_PROMPT
 from src.inference.generate import generate, load
 from src.rag.extractor import extract_facts
 from src.rag.store import WorldStore
-
-
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-DEFAULT_SETTING = (
-    "The Crooked Tankard, a cramped inn at the edge of a port town. Smoke "
-    "from cheap tallow candles, sour ale, salt on the wind through the open "
-    "shutters."
-)
-DEFAULT_CHARACTERS = (
-    "You are voicing the inn's regulars and staff. Most prominent:\n"
-    "- Garrick — the bartender, balding, missing two fingers on his right hand.\n"
-    "- A hooded figure in the corner, untouched mug in front of them."
+from src.config import (
+    DEFAULT_SETTING, DEFAULT_CHARACTERS, ADAPTER, DB_PATH, PORT,
+    TEMPERATURE, REPETITION_PENALTY, MAX_NEW_TOKENS, RAG_K, HISTORY_TURNS,
 )
 
+# use the same prompt the model was trained on
+INFERENCE_SYSTEM_PROMPT = SYSTEM_PROMPT
 
-# set in main()
+# model and store get loaded in main
 MODEL = None
 TOK = None
 STORE = None
-TEMPERATURE = 0.6
-MAX_NEW_TOKENS = 300
-RAG_K = 5
+
+STORE_WRITE = True  # write extracted facts to memory
 
 
 def facts_md():
-    if STORE is None:
-        return "*(RAG disabled)*"
     facts = STORE.all()
     if not facts:
         return "*(no facts yet)*"
@@ -47,13 +33,10 @@ def chat(action, history, setting, chars, turns):
         return history, turns, facts_md(), ""
 
     # pull relevant facts for the world_state slot
-    if STORE is not None:
-        retrieved = STORE.query(f"{setting}\n{chars}\n{action}", k=RAG_K)
-        world_state = "\n".join(f"- {f}" for f in retrieved) or "(none)"
-    else:
-        world_state = "(none)"
+    retrieved = STORE.query(f"{setting}\n{chars}\n{action}", k=RAG_K)
+    world_state = "\n".join(f"- {f}" for f in retrieved) or "(none)"
 
-    hist = "\n".join(f"{spk}: {txt}" for spk, txt in (turns or [])[-8:]) or "(none)"
+    hist = "\n".join(f"{spk}: {txt}" for spk, txt in (turns or [])[-HISTORY_TURNS:]) or "(none)"
 
     msgs = to_messages({
         "setting": setting,
@@ -61,12 +44,13 @@ def chat(action, history, setting, chars, turns):
         "world_state": world_state,
         "history": hist,
         "player_action": action,
-    }, narrator_response=None)
+    }, narrator_response=None, system_prompt=INFERENCE_SYSTEM_PROMPT)
 
     response, _ = generate(
         MODEL, TOK, msgs,
         max_new_tokens=MAX_NEW_TOKENS,
         temperature=TEMPERATURE,
+        repetition_penalty=REPETITION_PENALTY,
     )
     response = response.strip()
 
@@ -76,7 +60,7 @@ def chat(action, history, setting, chars, turns):
         {"role": "assistant", "content": response},
     ]
 
-    if STORE is not None:
+    if STORE_WRITE:
         new_facts = extract_facts(response)
         if new_facts:
             STORE.add(new_facts, source_turn=len(turns))
@@ -85,7 +69,7 @@ def chat(action, history, setting, chars, turns):
 
 
 def regenerate(history, setting, chars, turns):
-    # drop the last GM and the player turn that triggered it  then re-run
+    # drop the last GM reply and the player turn before it, then run again
     if not turns or turns[-1][0] != "GM":
         return history, turns, facts_md(), ""
     last_player = turns[-2][1]
@@ -99,46 +83,29 @@ def reset():
 
 
 def forget():
-    if STORE is not None:
-        STORE.clear()
+    STORE.clear()
     return facts_md()
 
 
 def apply_scene():
-    if STORE is not None:
-        STORE.clear()
+    STORE.clear()
     return [], [], facts_md()
 
 
 def main():
-    global MODEL, TOK, STORE, TEMPERATURE, MAX_NEW_TOKENS, RAG_K
+    global MODEL, TOK, STORE
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--adapter", type=Path, default=REPO_ROOT / "runs" / "v2" / "final")
-    parser.add_argument("--no-rag", action="store_true")
-    parser.add_argument("--db-path", type=Path, default=REPO_ROOT / "data" / "world_state" / "chroma")
-    parser.add_argument("--temperature", type=float, default=0.6)
-    parser.add_argument("--max-new-tokens", type=int, default=300)
-    parser.add_argument("--rag-k", type=int, default=5)
-    parser.add_argument("--share", action="store_true")
-    parser.add_argument("--port", type=int, default=7860)
-    args = parser.parse_args()
-
-    print(f"loading {args.adapter}...")
-    MODEL, TOK = load(args.adapter)
+    print(f"loading {ADAPTER}...")
+    MODEL, TOK = load(ADAPTER)
     print("model ready")
 
-    if not args.no_rag:
-        STORE = WorldStore(args.db_path)
-        print(f"RAG: {STORE.count()} facts in memory")
-
-    TEMPERATURE = args.temperature
-    MAX_NEW_TOKENS = args.max_new_tokens
-    RAG_K = args.rag_k
+    # set up the RAG memory store
+    STORE = WorldStore(DB_PATH)
+    print(f"RAG: {STORE.count()} facts in memory")
 
     with gr.Blocks(title="GM RPG") as app:
         gr.Markdown("# Game Master RPG")
-        gr.Markdown("_Fine-tuned Llama 3.2 3B + RAG memory._")
+        gr.Markdown("_Fine-tuned Llama 3.1 8B + RAG memory._")
 
         with gr.Row():
             with gr.Column(scale=3):
@@ -151,7 +118,7 @@ def main():
 
                 action_box = gr.Textbox(
                     label="Player action",
-                    placeholder="e.g. I walk up to the bar and order an ale.",
+                    placeholder="e.g. I head below deck to check on the sugar barrels.",
                     lines=1, max_lines=4,
                 )
                 with gr.Row():
@@ -178,7 +145,8 @@ def main():
         forget_btn.click(forget, outputs=[facts_box])
         apply_btn.click(apply_scene, outputs=[chatbot, turns, facts_box])
 
-    app.launch(server_name="0.0.0.0", server_port=args.port, share=args.share)
+    # share=True always makes a public link
+    app.launch(server_name="0.0.0.0", server_port=PORT, share=True)
 
 
 if __name__ == "__main__":

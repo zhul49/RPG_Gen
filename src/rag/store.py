@@ -6,17 +6,18 @@ from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunct
 
 
 def entity_key(fact):
-    """Derive a stable id from a 'Name — description' fact: the normalized
-    entity name (left of the dash). Same entity -> same key -> upsert
-    overwrites the prior fact about it, instead of appending a duplicate."""
+    # turn a "Name description" fact into a stable id from the name part
     key = fact
     for sep in (" — ", "—", " - "):
         if sep in fact:
             key = fact.split(sep, 1)[0]
             break
     key = re.sub(r"\s+", " ", key.strip().lower())
-    key = re.sub(r"^(the|a|an)\s+", "", key)  # "The ring"/"Ring" -> "ring"
-    return key or fact.strip().lower()
+    key = re.sub(r"^(the|a|an)\s+", "", key)  # "The ring" to "ring"
+    if key:
+        return key
+    return fact.strip().lower()
+
 
 _RELATION = re.compile(
     r"\b(sister|brother|daughter|son|father|mother|wife|husband|widow|widower|"
@@ -28,7 +29,7 @@ _RELATION = re.compile(
 
 
 def _description(fact):
-    """The part right of the dash (the claim), lowercased; '' if no dash."""
+    # the part right of the dash lowercased
     for sep in (" — ", "—", " - "):
         if sep in fact:
             return fact.split(sep, 1)[1].strip().lower()
@@ -36,9 +37,12 @@ def _description(fact):
 
 
 def relation_tokens(fact):
-    """Set of kinship/identity tokens asserted in a fact's description.
-    'Selia — Tomas's sister, brown hair' -> {'sister'}. Empty if none."""
-    return frozenset(m.group(1).lower() for m in _RELATION.finditer(_description(fact)))
+    # find the kinship words in a fact's description
+    desc = _description(fact)
+    tokens = set()
+    for m in _RELATION.finditer(desc):
+        tokens.add(m.group(1).lower())
+    return frozenset(tokens)
 
 
 class WorldStore:
@@ -52,41 +56,48 @@ class WorldStore:
             name=collection_name,
             embedding_function=ef,
         )
-        # Relationship-contradiction rejections, for /facts inspection + debugging.
+        # rejected relationship contradictions
         self.conflicts = []
 
     def add(self, facts, source_turn=None):
-        """facts: list[str]. Upserts keyed by entity name. Latest-wins for
-        volatile state, but CANON-PINNED for relationships: the first kinship a
-        fact asserts for an entity is recorded, and any later fact that asserts a
-        DIFFERENT kinship for that same entity is rejected (the canon fact is
-        kept) so a confabulated reveal can't overwrite established canon. The
-        rejected conflicts are recorded on self.conflicts for inspection.
-        No-op on empty list."""
+        # save facts, one per entity name. newest wins for normal facts
         if not facts:
             return
-        st = int(source_turn) if source_turn is not None else -1
-        # Dedup within this batch (last mention of an entity wins).
+        if source_turn is not None:
+            st = int(source_turn)
+        else:
+            st = -1
+
+        # if an entity shows up twice in this batch, keep the last one
         latest = {}
         for f in facts:
             latest[entity_key(f)] = f
 
-        # Pull existing docs+metas for these entities to apply canon-pinning.
+        # look up what we already have stored for these entities
         keys = list(latest.keys())
         existing = self.collection.get(ids=keys)
-        cur_doc = dict(zip(existing.get("ids", []), existing.get("documents", [])))
-        cur_meta = dict(zip(existing.get("ids", []), existing.get("metadatas", [])))
+        ex_ids = existing.get("ids", [])
+        ex_docs = existing.get("documents", [])
+        ex_metas = existing.get("metadatas", [])
+        cur_doc = {}
+        cur_meta = {}
+        for i in range(len(ex_ids)):
+            cur_doc[ex_ids[i]] = ex_docs[i]
+            cur_meta[ex_ids[i]] = ex_metas[i]
 
         ids, docs, metas = [], [], []
         for key, new_doc in latest.items():
             old_meta = cur_meta.get(key) or {}
-            # canon_rel: comma-joined kinship tokens pinned at first assertion.
+            # canon_rel is the kinship words we pinned the first time around
             canon = old_meta.get("canon_rel") or ""
-            canon_set = frozenset(t for t in canon.split(",") if t)
+            canon_set = set()
+            for t in canon.split(","):
+                if t:
+                    canon_set.add(t)
             new_set = relation_tokens(new_doc)
 
             if canon_set and new_set and new_set != canon_set:
-                # Contradicts pinned relationship -> reject, keep canon fact.
+                # this contradicts the pinned relationship, so reject it
                 self.conflicts.append({
                     "entity": key, "kept": cur_doc.get(key, ""),
                     "rejected": new_doc, "canon_rel": sorted(canon_set),
@@ -94,8 +105,13 @@ class WorldStore:
                 })
                 continue
 
-            # Accept the update. Persist (or first-time set) the canon pin.
-            pin = canon or (",".join(sorted(new_set)) if new_set else "")
+            # accept this fact, and work out the canon pin to store with it
+            if canon:
+                pin = canon
+            elif new_set:
+                pin = ",".join(sorted(new_set))
+            else:
+                pin = ""
             ids.append(key)
             docs.append(new_doc)
             meta = {"source_turn": st}
@@ -114,14 +130,18 @@ class WorldStore:
             query_texts=[text],
             n_results=min(k, n),
         )
-        return result["documents"][0] if result["documents"] else []
+        if result["documents"]:
+            return result["documents"][0]
+        return []
 
     def all(self):
-        """Return every stored fact (for /facts inspection)."""
-        return self.collection.get().get("documents", [])
+        # return every stored fact
+        data = self.collection.get()
+        return data.get("documents", [])
 
     def clear(self):
-        ids = self.collection.get().get("ids", [])
+        data = self.collection.get()
+        ids = data.get("ids", [])
         if ids:
             self.collection.delete(ids=ids)
 
