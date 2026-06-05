@@ -1,4 +1,3 @@
-import argparse
 import json
 from pathlib import Path
 
@@ -14,8 +13,21 @@ from trl import SFTConfig, SFTTrainer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+MODEL = "NousResearch/Meta-Llama-3.1-8B-Instruct"
+RUN_NAME = "v12"
+EPOCHS = 3
+BATCH = 4
+GRAD_ACCUM = 4
+LR = 2e-4
+LORA_R = 16
+LORA_ALPHA = 32
+MAX_LEN = 4096
+DATA_DIR = REPO_ROOT / "data" / "processed"
+OUT_DIR = REPO_ROOT / "runs"
+
 
 def load_jsonl(path):
+    # read a jsonl file into a dataset, one row per line
     rows = []
     with open(path) as f:
         for line in f:
@@ -24,35 +36,21 @@ def load_jsonl(path):
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--model", default="NousResearch/Meta-Llama-3.1-8B-Instruct")
-    p.add_argument("--run-name", default="v1")
-    p.add_argument("--epochs", type=int, default=3)
-    p.add_argument("--batch", type=int, default=4)
-    p.add_argument("--grad-accum", type=int, default=4)
-    p.add_argument("--lr", type=float, default=2e-4)
-    p.add_argument("--lora-r", type=int, default=16)
-    p.add_argument("--lora-alpha", type=int, default=32)
-    p.add_argument("--max-len", type=int, default=4096)
-    p.add_argument("--data-dir", type=Path,
-                   default=REPO_ROOT / "data" / "processed")
-    p.add_argument("--out-dir", type=Path,
-                   default=REPO_ROOT / "runs")
-    args = p.parse_args()
-
-    out_dir = args.out_dir / args.run_name
+    out_dir = OUT_DIR / RUN_NAME
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"loading datasets from {args.data_dir}...")
-    train_ds = load_jsonl(args.data_dir / "train.jsonl")
-    val_ds = load_jsonl(args.data_dir / "val.jsonl")
+    print(f"loading datasets from {DATA_DIR}...")
+    train_ds = load_jsonl(DATA_DIR / "train.jsonl")
+    val_ds = load_jsonl(DATA_DIR / "val.jsonl")
     print(f"  train: {len(train_ds)}, val: {len(val_ds)}")
 
-    print(f"loading tokenizer + model: {args.model}")
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    print(f"loading tokenizer + model: {MODEL}")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
+    # Llama has no pad token by default, so reuse the end-of-sequence one
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # load the base model in 4-bit to save memory
     bnb = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_quant_type="nf4",
@@ -60,16 +58,18 @@ def main():
         bnb_4bit_use_double_quant=True,
     )
     model = AutoModelForCausalLM.from_pretrained(
-        args.model,
+        MODEL,
         quantization_config=bnb,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
+    # caching is for generation, we are training so turn it off
     model.config.use_cache = False
 
+    # LoRA trains a few small adapter layers instead of the whole model
     lora = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
+        r=LORA_R,
+        lora_alpha=LORA_ALPHA,
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM",
@@ -79,16 +79,17 @@ def main():
         ],
     )
 
+    # all the training settings
     cfg = SFTConfig(
         output_dir=str(out_dir),
-        num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch,
-        per_device_eval_batch_size=args.batch,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.lr,
+        num_train_epochs=EPOCHS,
+        per_device_train_batch_size=BATCH,
+        per_device_eval_batch_size=BATCH,
+        gradient_accumulation_steps=GRAD_ACCUM,
+        learning_rate=LR,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
-        max_length=args.max_len,
+        max_length=MAX_LEN,
         logging_steps=10,
         eval_strategy="epoch",
         save_strategy="epoch",
@@ -108,13 +109,13 @@ def main():
         processing_class=tokenizer,
     )
 
-    print("=" * 60)
-    print(f"trainable params:")
+    # print how many weights we are actually training
+    print("trainable params:")
     trainer.model.print_trainable_parameters()
-    print("=" * 60)
     print("starting training...")
     trainer.train()
 
+    # save the trained adapter and its tokenizer
     print(f"\nsaving final adapter to {out_dir}/final/")
     trainer.save_model(str(out_dir / "final"))
     tokenizer.save_pretrained(str(out_dir / "final"))
