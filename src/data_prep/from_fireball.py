@@ -14,7 +14,6 @@ SETTING_DEFAULT = (
     "the GM narrates the outcome of."
 )
 
-# strips FIREBALL's *italic* / _italic_ / "> " markdown
 def strip_markdown(text):
     if not isinstance(text, str):
         return ""
@@ -74,7 +73,7 @@ def triple_to_example(triple, min_narrator_chars=80):
     # format just the NPC names for the characters slot
     characters_text = format_character_names(triple.get("combat_state_before"))
 
-    # 4. assemble the record
+    # put the record together
     slots = {
         "setting": SETTING_DEFAULT,
         "characters": characters_text,
